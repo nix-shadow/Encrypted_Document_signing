@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: cryptouser
+      POSTGRES_PASSWORD: cryptopass
+      POSTGRES_DB: cryptodb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # Changed to 5433 to avoid conflict with system PostgreSQL
+
+  backend:
+    build: ./backend
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://cryptouser:cryptopass@db:5432/cryptodb
+      SECRET_KEY: ${SECRET_KEY:-dev-secret}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session}
+      SESSION_MAX_AGE: 3600
+      LOGIN_RATE_LIMIT: 10
+    ports:
+      - "3001:8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  pgdata:
