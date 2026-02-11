@@ -141,6 +141,7 @@ function App() {
   const [mfaSetupData, setMfaSetupData] = useState(null)
   const [viewingSessions, setViewingSessions] = useState([])
   const [allViewingSessions, setAllViewingSessions] = useState([])
+  const [allDocuments, setAllDocuments] = useState([])
 
   const showMessage = (text, type = 'info') => {
     setMessage({ text, type })
@@ -436,21 +437,32 @@ function App() {
   const loadAdminData = async () => {
     if (!user?.role || user.role !== 'admin') return
     try {
-      const [users, pending, logins, devices, allDevs] = await Promise.all([
+      const [users, pending, logins, devices, allDevs, allDocs] = await Promise.all([
         api('/auth/admin/users'),
         api('/auth/admin/pending-users'),
         api('/auth/admin/pending-logins'),
         api('/auth/admin/pending-devices'),
         api('/auth/admin/all-devices'),
+        api('/auth/admin/all-documents'),
       ])
       setAllUsers(users)
       setPendingUsers(pending)
       setPendingLogins(logins)
       setPendingDevices(devices)
       setAllDevices(allDevs)
+      setAllDocuments(allDocs)
+      console.log('Admin data loaded:', {
+        users: users.length,
+        pending: pending.length,
+        logins: logins.length,
+        devices: devices.length,
+        allDevices: allDevs.length,
+        allDocuments: allDocs.length
+      })
       // Load all viewing sessions
       loadAllViewingSessions()
     } catch (err) {
+      console.error('Error loading admin data:', err)
       showMessage('Error loading admin data: ' + err.message, 'error')
     }
   }
@@ -1495,6 +1507,112 @@ function App() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+
+              {/* All Documents */}
+              <div className="card">
+                <h3 style={{ margin: '0 0 16px 0', color: '#1e293b', fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  📄 All Documents ({allDocuments.length})
+                  <span style={{ 
+                    marginLeft: 'auto', 
+                    fontSize: '12px', 
+                    color: '#64748b',
+                    fontWeight: '400'
+                  }}>
+                    🔓 Admin has unrestricted access
+                  </span>
+                </h3>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #e2e8f0', textAlign: 'left' }}>
+                        <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Filename</th>
+                        <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Owner</th>
+                        <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Type</th>
+                        <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Protection</th>
+                        <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Uploaded</th>
+                        <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allDocuments.length === 0 ? (
+                        <tr>
+                          <td colSpan="6" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>
+                            No documents in the system
+                          </td>
+                        </tr>
+                      ) : (
+                        allDocuments.map(doc => (
+                          <tr key={doc.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '12px' }}>
+                              <div style={{ fontWeight: '600', color: '#1e293b' }}>{doc.filename}</div>
+                              <div style={{ fontSize: '11px', color: '#94a3b8' }}>ID: {doc.id}</div>
+                            </td>
+                            <td style={{ padding: '12px', color: '#64748b', fontSize: '13px' }}>
+                              {doc.owner_email}
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <span style={{ 
+                                fontSize: '11px', 
+                                color: '#64748b',
+                                fontFamily: 'monospace'
+                              }}>
+                                {doc.content_type.split('/')[1] || doc.content_type}
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              {doc.has_pdf_password ? (
+                                <span style={{ 
+                                  background: '#fef3c7', 
+                                  color: '#92400e',
+                                  padding: '4px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: '600'
+                                }}>
+                                  🔒 PASSWORD
+                                </span>
+                              ) : (
+                                <span style={{ 
+                                  color: '#94a3b8',
+                                  fontSize: '11px'
+                                }}>
+                                  None
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ padding: '12px', color: '#64748b', fontSize: '13px' }}>
+                              {new Date(doc.created_at).toLocaleDateString()}
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <button 
+                                onClick={() => openDoc(doc.id)}
+                                style={{ 
+                                  padding: '6px 12px', 
+                                  fontSize: '12px',
+                                  background: '#6366f1',
+                                  color: 'white'
+                                }}
+                              >
+                                👁️ View
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ 
+                  marginTop: '12px', 
+                  padding: '12px', 
+                  background: '#eff6ff', 
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  color: '#1e40af'
+                }}>
+                  💡 <strong>Admin Privilege:</strong> All documents are automatically shared with admins upon upload. Password-protected files are automatically decrypted without requiring the password.
                 </div>
               </div>
 

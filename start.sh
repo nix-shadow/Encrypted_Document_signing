@@ -54,7 +54,46 @@ if [ -n "$BACKEND_RUNNING" ] && [ -n "$FRONTEND_RUNNING" ] && [ -n "$DB_RUNNING"
         echo "   Database: PostgreSQL on port 5433"
         echo "   API Docs: http://localhost:3001/docs"
         echo ""
-        echo "💡 Tip: Use 'docker-compose restart' to restart services"
+        
+        # Check for code changes
+        echo "🔍 Checking for code changes..."
+        NEEDS_RESTART=false
+        
+        # Check if there are uncommitted changes in backend or frontend
+        if git diff --quiet HEAD -- backend/ frontend/ 2>/dev/null; then
+            echo "✅ No code changes detected since last commit"
+        else
+            echo "⚠️  Code changes detected in backend/ or frontend/"
+            NEEDS_RESTART=true
+        fi
+        
+        # Check container uptime (if running for less than 5 minutes, likely just started)
+        BACKEND_UPTIME=$(docker inspect -f '{{.State.StartedAt}}' $(docker-compose ps -q backend) 2>/dev/null)
+        CURRENT_TIME=$(date -u +%s)
+        STARTED_TIME=$(date -d "$BACKEND_UPTIME" +%s 2>/dev/null || echo $CURRENT_TIME)
+        UPTIME_SECONDS=$((CURRENT_TIME - STARTED_TIME))
+        
+        if [ $UPTIME_SECONDS -lt 300 ]; then
+            echo "✅ Containers recently started (${UPTIME_SECONDS}s ago)"
+            NEEDS_RESTART=false
+        fi
+        
+        if [ "$NEEDS_RESTART" = true ]; then
+            echo ""
+            echo "🔄 Restart recommended to apply code changes"
+            read -p "   Do you want to restart the services? (y/N): " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                echo "🔄 Restarting services..."
+                docker-compose restart
+                echo "✅ Services restarted successfully!"
+            else
+                echo "⏭️  Skipping restart"
+            fi
+        fi
+        
+        echo ""
+        echo "💡 Tip: Use 'docker-compose restart' to restart services manually"
         echo "📊 View logs: docker-compose logs -f"
         echo "🛑 Stop services: docker-compose down"
         exit 0

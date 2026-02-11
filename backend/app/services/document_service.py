@@ -76,7 +76,7 @@ def create_document(
         # Encrypt PDF password using same AES key (separate nonce/tag)
         pdf_pass_bytes = pdf_password.encode('utf-8')
         pdf_enc, pdf_nonce, pdf_tag = crypto.encrypt_document(pdf_pass_bytes, aes_key)
-        # Store as: nonce(16) + tag(16) + ciphertext
+        # Store as: nonce(12) + tag(16) + ciphertext (AES-GCM uses 12-byte nonce)
         pdf_password_encrypted = pdf_nonce + pdf_tag + pdf_enc
         has_pdf_password = True
     
@@ -97,9 +97,29 @@ def create_document(
     db.commit()
     db.refresh(doc)
     
+    # Auto-share with all admin users for oversight
+    from ..models import UserRole
+    admin_users = db.query(User).filter(User.role == 'admin', User.id != owner.id).all()
+    for admin in admin_users:
+        try:
+            # Encrypt AES key for admin
+            encrypted_key_for_admin = crypto.encrypt_aes_key_for_public_key(aes_key, admin.public_key_pem)
+            admin_share = DocumentShare(
+                document_id=doc.id,
+                recipient_id=admin.id,
+                encrypted_aes_key=encrypted_key_for_admin
+            )
+            db.add(admin_share)
+        except Exception:
+            # Skip if admin sharing fails (non-critical)
+            pass
+    db.commit()
+    
     log_msg = f"Uploaded {filename}"
     if has_pdf_password:
         log_msg += " (with PDF password protection)"
+    if len(admin_users) > 0:
+        log_msg += f" (auto-shared with {len(admin_users)} admin(s))"
     create_audit_log(db, owner.id, "document.upload", "document", doc.id, log_msg)
     
     return doc
@@ -220,51 +240,80 @@ def decrypt_and_prepare_download(
     # Decrypt and verify document
     plaintext, verified, tampered = decrypt_and_verify_document(doc, user, private_key_pem, db)
     
+    # Admin bypass: admins can access password-protected files without the password
+    is_admin = user.role == 'admin'
+    
     # If document has PDF password protection
     if doc.has_pdf_password:
-        if not pdf_password:
-            raise ValueError("File password required for this document")
-        
-        # Decrypt stored PDF password
-        try:
-            # Get AES key
-            if doc.owner_id == user.id:
-                encrypted_key = doc.aes_key_encrypted_owner
-            else:
-                share = get_share(db, doc.id, user.id)
-                if not share:
-                    raise ValueError("Access denied")
-                encrypted_key = share.encrypted_aes_key
+        if not is_admin:
+            # Non-admin users need to provide password
+            if not pdf_password:
+                raise ValueError("File password required for this document")
             
-            aes_key = crypto.decrypt_aes_key_with_private_key(encrypted_key, private_key_pem)
-            
-            # Decrypt PDF password (format: nonce(16) + tag(16) + ciphertext)
-            if doc.pdf_password_encrypted:
-                pdf_nonce = doc.pdf_password_encrypted[:16]
-                pdf_tag = doc.pdf_password_encrypted[16:32]
-                pdf_enc = doc.pdf_password_encrypted[32:]
-                stored_pdf_password = crypto.decrypt_document(pdf_enc, pdf_nonce, pdf_tag, aes_key).decode('utf-8')
+            # Decrypt stored PDF password and verify
+            try:
+                # Get AES key
+                if doc.owner_id == user.id:
+                    encrypted_key = doc.aes_key_encrypted_owner
+                else:
+                    share = get_share(db, doc.id, user.id)
+                    if not share:
+                        raise ValueError("Access denied")
+                    encrypted_key = share.encrypted_aes_key
                 
-                # Verify provided password matches
-                if pdf_password != stored_pdf_password:
-                    raise ValueError("Incorrect file password")
-        except Exception as e:
-            raise ValueError(f"Failed to decrypt file password: {str(e)}")
+                aes_key = crypto.decrypt_aes_key_with_private_key(encrypted_key, private_key_pem)
+                
+                # Decrypt PDF password (format: nonce(12) + tag(16) + ciphertext)
+                if not doc.pdf_password_encrypted:
+                    raise ValueError("Password data not found")
+                    
+                if len(doc.pdf_password_encrypted) < 28:
+                    raise ValueError(f"Invalid password data length: {len(doc.pdf_password_encrypted)} bytes (expected >= 28)")
+                
+                try:
+                    pdf_nonce = doc.pdf_password_encrypted[:12]
+                    pdf_tag = doc.pdf_password_encrypted[12:28]
+                    pdf_enc = doc.pdf_password_encrypted[28:]
+                    stored_pdf_password = crypto.decrypt_document(pdf_enc, pdf_nonce, pdf_tag, aes_key).decode('utf-8')
+                    
+                    # Verify provided password matches
+                    if pdf_password != stored_pdf_password:
+                        raise ValueError("Incorrect file password")
+                except UnicodeDecodeError:
+                    raise ValueError("Failed to decode password - incorrect password or corrupted data")
+                except Exception as decrypt_err:
+                    error_type = type(decrypt_err).__name__
+                    error_msg = str(decrypt_err) if str(decrypt_err) else "Unknown decryption error"
+                    raise ValueError(f"Decryption failed ({error_type}): {error_msg}")
+            except ValueError as ve:
+                raise ve  # Re-raise ValueError as-is
+            except Exception as e:
+                error_type = type(e).__name__
+                error_msg = str(e) if str(e) else "Unknown error"
+                raise ValueError(f"Failed to process file password ({error_type}): {error_msg}")
         
         # Apply password protection to file (works for ALL file types using ZIP)
-        try:
-            # Wrap file in password-protected ZIP
-            plaintext = pdf_protection.protect_file(plaintext, pdf_password, doc.filename)
-            
-            create_audit_log(
-                db, user.id, "document.download", "document", doc.id, 
-                f"Downloaded {doc.filename} (password-protected ZIP)"
-            )
-        except Exception as e:
-            # If protection fails, return original content with warning
+        if not is_admin:
+            # Regular users get password-protected ZIP
+            try:
+                # Wrap file in password-protected ZIP
+                plaintext = pdf_protection.protect_file(plaintext, pdf_password, doc.filename)
+                
+                create_audit_log(
+                    db, user.id, "document.download", "document", doc.id, 
+                    f"Downloaded {doc.filename} (password-protected ZIP)"
+                )
+            except Exception as e:
+                # If protection fails, return original content with warning
+                create_audit_log(
+                    db, user.id, "document.download", "document", doc.id,
+                    f"Downloaded {doc.filename} (password protection failed: {str(e)})"
+                )
+        else:
+            # Admin gets the raw decrypted file without password protection
             create_audit_log(
                 db, user.id, "document.download", "document", doc.id,
-                f"Downloaded {doc.filename} (password protection failed: {str(e)})"
+                f"Admin downloaded {doc.filename} (bypass password protection)"
             )
     else:
         create_audit_log(

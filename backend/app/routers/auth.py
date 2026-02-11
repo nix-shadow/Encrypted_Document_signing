@@ -716,3 +716,29 @@ def admin_trust_device(
     )
     
     return {"message": "Device trusted successfully"}
+
+
+@router.get("/admin/all-documents")
+def list_all_documents(
+    db: Session = Depends(get_db),
+    admin_user: tuple = Depends(get_admin_user)
+):
+    """Admin endpoint to list ALL documents in the system."""
+    from ..models import Document
+    
+    documents = db.query(Document).order_by(Document.created_at.desc()).all()
+    
+    result = []
+    for doc in documents:
+        owner = db.query(User).filter(User.id == doc.owner_id).first()
+        result.append({
+            "id": doc.id,
+            "filename": doc.filename,
+            "content_type": doc.content_type,
+            "owner_id": doc.owner_id,
+            "owner_email": owner.email if owner else "Unknown",
+            "has_pdf_password": doc.has_pdf_password,
+            "created_at": doc.created_at
+        })
+    
+    return result
