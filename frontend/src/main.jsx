@@ -139,6 +139,8 @@ function App() {
   const [trustedDevices, setTrustedDevices] = useState([])
   const [mfaEnabled, setMfaEnabled] = useState(false)
   const [mfaSetupData, setMfaSetupData] = useState(null)
+  const [viewingSessions, setViewingSessions] = useState([])
+  const [allViewingSessions, setAllViewingSessions] = useState([])
 
   const showMessage = (text, type = 'info') => {
     setMessage({ text, type })
@@ -183,6 +185,28 @@ function App() {
     loadMe()
     loadDocs()
   }, [])
+
+  // Auto-refresh viewing sessions every 10 seconds for selected document
+  useEffect(() => {
+    if (!selected?.id || !user) return
+    
+    const interval = setInterval(() => {
+      loadViewingSessions(selected.id)
+    }, 10000) // 10 seconds
+    
+    return () => clearInterval(interval)
+  }, [selected?.id, user])
+
+  // Auto-refresh admin viewing sessions every 15 seconds
+  useEffect(() => {
+    if (!showAdminPanel || !user || user.role !== 'admin') return
+    
+    const interval = setInterval(() => {
+      loadAllViewingSessions()
+    }, 15000) // 15 seconds
+    
+    return () => clearInterval(interval)
+  }, [showAdminPanel, user])
 
   const handleRegister = async (e) => {
     e.preventDefault()
@@ -281,6 +305,8 @@ function App() {
       setSelected(doc)
       const status = doc.verified ? '✓ Verified' : '⚠ Unverified'
       showMessage(`${status} - Document decrypted successfully`, doc.verified ? 'success' : 'warning')
+      // Load viewing sessions for owner/admin
+      loadViewingSessions(id)
     } catch (err) {
       // Check if error is about file password
       if (err.message.includes('password required')) {
@@ -293,6 +319,46 @@ function App() {
       } else {
         showMessage(err.message, 'error')
       }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadViewingSessions = async (docId) => {
+    if (!user) return
+    try {
+      const sessions = await api(`/documents/${docId}/viewing-sessions`)
+      setViewingSessions(sessions)
+    } catch (err) {
+      // User might not have permission
+      setViewingSessions([])
+    }
+  }
+
+  const approveViewer = async (docId, sessionId, approve) => {
+    setLoading(true)
+    try {
+      await api(`/documents/${docId}/approve-viewer/${sessionId}`, {
+        method: 'POST',
+        body: JSON.stringify({ approve })
+      })
+      showMessage(approve ? '✓ Viewer approved' : '✗ Viewer rejected', 'success')
+      loadViewingSessions(docId)
+    } catch (err) {
+      showMessage(err.message, 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const endSession = async (docId, sessionId) => {
+    setLoading(true)
+    try {
+      await api(`/documents/${docId}/end-session/${sessionId}`, { method: 'POST' })
+      showMessage('✓ Viewing session ended', 'success')
+      loadViewingSessions(docId)
+    } catch (err) {
+      showMessage(err.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -382,8 +448,34 @@ function App() {
       setPendingLogins(logins)
       setPendingDevices(devices)
       setAllDevices(allDevs)
+      // Load all viewing sessions
+      loadAllViewingSessions()
     } catch (err) {
       showMessage('Error loading admin data: ' + err.message, 'error')
+    }
+  }
+
+  const loadAllViewingSessions = async () => {
+    if (!user?.role || user.role !== 'admin') return
+    try {
+      // Get all documents first
+      const allDocs = await api('/documents')
+      const allSessions = []
+      
+      // Fetch viewing sessions for each document
+      for (const doc of allDocs) {
+        try {
+          const sessions = await api(`/documents/${doc.id}/viewing-sessions`)
+          sessions.forEach(s => {
+            allSessions.push({ ...s, document_name: doc.filename, document_id: doc.id })
+          })
+        } catch (e) {
+          // Skip if no access
+        }
+      }
+      setAllViewingSessions(allSessions)
+    } catch (err) {
+      console.error('Failed to load viewing sessions:', err)
     }
   }
 
@@ -1016,6 +1108,105 @@ function App() {
                     )}
                   </div>
 
+                  {/* Viewing Sessions Section (Owner/Admin) */}
+                  {(selected.owner_id === user.id || user.role === 'admin') && viewingSessions.length > 0 && (
+                    <div style={{ 
+                      background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)', 
+                      padding: '20px', 
+                      borderRadius: '12px',
+                      border: '1px solid #fcd34d',
+                      marginBottom: '20px'
+                    }}>
+                      <h4 style={{ margin: '0 0 16px 0', display: 'flex', alignItems: 'center', gap: '8px', color: '#92400e' }}>
+                        👁️ Currently Viewing Devices
+                        <span style={{ 
+                          marginLeft: 'auto', 
+                          background: '#92400e', 
+                          color: '#fef3c7',
+                          padding: '4px 12px', 
+                          borderRadius: '12px',
+                          fontSize: '13px',
+                          fontWeight: '600'
+                        }}>
+                          {viewingSessions.length}
+                        </span>
+                      </h4>
+                      <div style={{ display: 'grid', gap: '12px' }}>
+                        {viewingSessions.map(session => (
+                          <div 
+                            key={session.id}
+                            style={{
+                              background: 'white',
+                              padding: '12px',
+                              borderRadius: '8px',
+                              border: '1px solid #fcd34d',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center'
+                            }}
+                          >
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontWeight: '600', color: '#1e293b', fontSize: '14px' }}>
+                                {session.user_email}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+                                Device: {session.device_name || 'Unknown'} • IP: {session.ip_address}
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                                Started: {new Date(session.started_at).toLocaleString()} • 
+                                Active: {new Date(session.last_active_at).toLocaleString()}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <span style={{
+                                background: session.status === 'approved' ? '#d1fae5' : 
+                                           session.status === 'pending' ? '#fef3c7' : '#fee2e2',
+                                color: session.status === 'approved' ? '#065f46' :
+                                       session.status === 'pending' ? '#92400e' : '#991b1b',
+                                padding: '4px 10px',
+                                borderRadius: '8px',
+                                fontSize: '11px',
+                                fontWeight: '700',
+                                textTransform: 'uppercase'
+                              }}>
+                                {session.status}
+                              </span>
+                              {session.status === 'pending' && (
+                                <>
+                                  <button 
+                                    onClick={() => approveViewer(selected.id, session.id, true)}
+                                    disabled={loading}
+                                    style={{ padding: '6px 12px', fontSize: '12px' }}
+                                  >
+                                    ✓ Approve
+                                  </button>
+                                  <button 
+                                    onClick={() => approveViewer(selected.id, session.id, false)}
+                                    disabled={loading}
+                                    className="danger"
+                                    style={{ padding: '6px 12px', fontSize: '12px' }}
+                                  >
+                                    ✗ Reject
+                                  </button>
+                                </>
+                              )}
+                              {session.status === 'approved' && (
+                                <button 
+                                  onClick={() => endSession(selected.id, session.id)}
+                                  disabled={loading}
+                                  className="danger"
+                                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                                >
+                                  End Session
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Share Section */}
                   {selected.owner_id === user.id && (
                     <div style={{ 
@@ -1305,6 +1496,103 @@ function App() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+              {/* Active Viewing Sessions */}
+              <div className="card">
+                <h3 style={{ margin: '0 0 16px 0', color: '#1e293b', fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  👁️ Real-Time Document Viewers
+                  {allViewingSessions.length > 0 && (
+                    <span style={{ background: '#f59e0b', color: 'white', padding: '2px 8px', borderRadius: '12px', fontSize: '12px', fontWeight: '600' }}>
+                      {allViewingSessions.length} Active
+                    </span>
+                  )}
+                </h3>
+                {allViewingSessions.length === 0 ? (
+                  <p style={{ color: '#94a3b8', margin: 0 }}>No active viewing sessions</p>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid #e2e8f0', textAlign: 'left' }}>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Document</th>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>User</th>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Device</th>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>IP Address</th>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Status</th>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Started</th>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Last Active</th>
+                          <th style={{ padding: '12px', color: '#64748b', fontWeight: '600', fontSize: '13px' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allViewingSessions.map(session => (
+                          <tr key={`${session.document_id}-${session.id}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '12px', color: '#1e293b', fontWeight: '600', fontSize: '13px' }}>
+                              {session.document_name}
+                            </td>
+                            <td style={{ padding: '12px', color: '#1e293b' }}>{session.user_email}</td>
+                            <td style={{ padding: '12px', color: '#64748b', fontSize: '13px' }}>
+                              {session.device_name || 'Unknown'}
+                            </td>
+                            <td style={{ padding: '12px', color: '#64748b', fontSize: '13px' }}>{session.ip_address}</td>
+                            <td style={{ padding: '12px' }}>
+                              <span style={{
+                                background: session.status === 'approved' ? '#d1fae5' : 
+                                           session.status === 'pending' ? '#fef3c7' : '#fee2e2',
+                                color: session.status === 'approved' ? '#065f46' :
+                                       session.status === 'pending' ? '#92400e' : '#991b1b',
+                                padding: '4px 10px',
+                                borderRadius: '6px',
+                                fontSize: '11px',
+                                fontWeight: '700',
+                                textTransform: 'uppercase'
+                              }}>
+                                {session.status}
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px', color: '#64748b', fontSize: '13px' }}>
+                              {new Date(session.started_at).toLocaleString()}
+                            </td>
+                            <td style={{ padding: '12px', color: '#64748b', fontSize: '13px' }}>
+                              {new Date(session.last_active_at).toLocaleString()}
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              {session.status === 'pending' ? (
+                                <div style={{ display: 'flex', gap: '4px' }}>
+                                  <button 
+                                    onClick={() => approveViewer(session.document_id, session.id, true)}
+                                    disabled={loading}
+                                    style={{ padding: '4px 8px', fontSize: '11px' }}
+                                  >
+                                    ✓
+                                  </button>
+                                  <button 
+                                    onClick={() => approveViewer(session.document_id, session.id, false)}
+                                    disabled={loading}
+                                    className="danger"
+                                    style={{ padding: '4px 8px', fontSize: '11px' }}
+                                  >
+                                    ✗
+                                  </button>
+                                </div>
+                              ) : session.status === 'approved' ? (
+                                <button 
+                                  onClick={() => endSession(session.document_id, session.id)}
+                                  disabled={loading}
+                                  className="danger"
+                                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                                >
+                                  End
+                                </button>
+                              ) : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               {/* All Authenticated Devices */}
