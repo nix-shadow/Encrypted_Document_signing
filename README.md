@@ -73,6 +73,8 @@ pytest tests/ --cov=app --cov-report=html
 - 🔐 **Device Verification**: New devices require verification before access
 - 🔐 **Document View Tracking**: Monitor which devices are viewing documents
 - 🔐 **Viewing Approval**: Users need approval from sender/admin to view documents
+- 🔐 **Auto-Share with Admins**: All uploaded documents automatically shared with admin users
+- 🔐 **Admin Password Bypass**: Admins can access password-protected PDFs without password
 
 ### Security Features
 - ✅ **Password Security**: bcrypt hashing (work factor 12)
@@ -89,6 +91,8 @@ pytest tests/ --cov=app --cov-report=html
 - 🔐 **Device Fingerprinting**: Track and verify trusted devices
 - 🔐 **Automatic Device Blocking**: Unverified devices cannot access system
 - 🔐 **Document Viewing Control**: Approval required before viewing shared documents
+- 🔐 **Admin Omniscience**: Admins automatically see all uploaded documents
+- 🔐 **Unrestricted Admin Access**: Admins bypass password protection and approval workflows
 
 ### Advanced Features
 - ✅ **Multi-Factor Authentication**: TOTP-based 2FA
@@ -212,6 +216,7 @@ Total: 35 tests, 85% coverage, 5,500+ lines of code
 POST   /admin/create-user     Create new user (admin only)
 POST   /admin/approve-login   Approve pending login (admin only)
 POST   /admin/approve-device  Approve device verification (admin only)
+GET    /admin/all-documents   List all documents with owner info (admin only)
 
 USER ENDPOINTS:
 POST   /login                 Login (requires admin approval)
@@ -315,8 +320,10 @@ User → Upload UI → POST /api/documents/upload
      4. Sign hash with user's RSA private key
      5. Encrypt AES key with user's RSA public key
      6. Store encrypted data in PostgreSQL
-     7. Log to audit_log
+     7. Auto-share with all admin users (encrypt AES key for each admin)
+     8. Log to audit_log
   → Return document metadata
+  → Admins automatically have access to all documents
 ```
 
 ### Share Document Flow ⭐ NEW
@@ -338,7 +345,7 @@ User → Download → GET /api/documents/download/{id}
   → Document Service:
      1. Check if user is document owner or admin:
         - Owner: Full access (no approval needed)
-        - Admin: Full access (bypass approval)
+        - Admin: Full access (bypass approval + password protection)
         - Shared user: Check approval status
      2. IF shared user AND not approved:
         - Create pending_view_approval record
@@ -348,6 +355,11 @@ User → Download → GET /api/documents/download/{id}
         - Retrieve encrypted document + AES key
         - Decrypt AES key with user's private key
         - Decrypt document with AES key
+        - IF password-protected AND not admin:
+           - Validate PDF password
+           - Return ZIP with password-protected PDF
+        - IF admin:
+           - Return raw decrypted file (bypass password)
         - Compute SHA-256 hash of decrypted content
         - Verify signature with owner's public key
         - Log viewing_started with device info
@@ -599,6 +611,14 @@ curl -X GET http://localhost:8000/api/documents/1/viewing-devices \
   -b admin_cookies.txt
 ```
 **Result**: List of devices with user info, timestamps, and approval status
+
+### 8. View All Documents (Admin Only) 🔐
+```bash
+# Admin sees all documents uploaded by all users
+curl -X GET http://localhost:8000/api/auth/admin/all-documents \
+  -b admin_cookies.txt
+```
+**Result**: Complete list with filename, owner email, content type, password protection status, upload date
 
 ---
 
