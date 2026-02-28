@@ -150,6 +150,7 @@ class AdminUserResponse(BaseModel):
     is_approved: bool
     approved_at: Optional[datetime]
     created_at: datetime
+    public_key_pem: str  # Include public key
 
     class Config:
         orm_mode = True

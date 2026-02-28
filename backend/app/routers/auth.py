@@ -138,7 +138,8 @@ def login(
     
     # Get device info
     user_agent = request.headers.get("user-agent", "unknown")
-    ip_address = request.headers.get("x-forwarded-for", request.client.host).split(",")[0].strip()
+    client_host = request.client.host if request.client else "127.0.0.1"
+    ip_address = request.headers.get("x-forwarded-for", client_host).split(",")[0].strip()
     
     # Get or create device
     device, is_new = device_service.get_or_create_device(db, user.id, user_agent, ip_address)

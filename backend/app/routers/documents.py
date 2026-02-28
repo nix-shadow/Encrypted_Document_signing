@@ -76,7 +76,8 @@ def fetch_document(
     if user.role != 'admin' and doc.owner_id != user.id:
         # Get device info
         user_agent = request.headers.get("user-agent", "unknown")
-        ip_address = request.headers.get("x-forwarded-for", request.client.host).split(",")[0].strip()
+        client_host = request.client.host if request.client else "127.0.0.1"
+        ip_address = request.headers.get("x-forwarded-for", client_host).split(",")[0].strip()
         device, _ = device_service.get_or_create_device(db, user.id, user_agent, ip_address)
         
         # Check for existing viewing session

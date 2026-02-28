@@ -134,8 +134,9 @@ def rate_limit(max_calls: int, period_seconds: int = 60, key_func: Optional[Call
             if key_func:
                 key = key_func(request)
             else:
-                # Default: use client IP
-                key = f"ip:{request.client.host}"
+                # Default: use client IP (or "test" for test clients without IP)
+                client_host = request.client.host if request.client else "test"
+                key = f"ip:{client_host}"
             
             # Check rate limit
             allowed, retry_after = _rate_limiter.is_allowed(

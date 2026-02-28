@@ -71,12 +71,18 @@ def create_user(db: Session, email: str, password: str, role=None) -> User:
     public_key, private_key = crypto.generate_rsa_keypair(key_size=2048)
     encrypted_private = crypto.encrypt_private_key(private_key, password)
     
+    # Handle role as either string or enum
+    if role:
+        role_value = role.value if hasattr(role, 'value') else role
+    else:
+        role_value = UserRole.USER.value
+    
     user = User(
         email=email,
         password_hash=hash_password(password),
         public_key_pem=public_key,
         private_key_encrypted=encrypted_private,
-        role=role.value if role else UserRole.USER.value,
+        role=role_value,
         is_approved=False  # Require admin approval unless set otherwise
     )
     db.add(user)
